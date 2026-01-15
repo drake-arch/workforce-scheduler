@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Atomix Workforce Scheduler</title>
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-black">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo } = React;
+
+        const WorkforceScheduler = () => {
+          const [ordersPerWeek, setOrdersPerWeek] = useState(25000);
+          const [totalEmployees, setTotalEmployees] = useState(50);
+          const [ordersPerPersonHour, setOrdersPerPersonHour] = useState(12.5);
+          const [otMultiplier, setOtMultiplier] = useState(1.5);
+          
+          const [shifts, setShifts] = useState([
+            {
+              id: 1,
+              name: 'First Shift',
+              startTime: '6:00 AM',
+              duration: 10,
+              days: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+              peoplePerDay: 20
+            },
+            {
+              id: 2,
+              name: 'Second Shift',
+              startTime: '12:00 PM',
+              duration: 10,
+              days: ['Sunday', 'Monday', 'Tuesday', 'Wednesday'],
+              peoplePerDay: 20
+            }
+          ]);
+
+          const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+          const addShift = () => {
+            const newShift = {
+              id: Date.now(),
+              name: `Shift ${shifts.length + 1}`,
+              startTime: '8:00 AM',
+              duration: 8,
+              days: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+              peoplePerDay: 10
+            };
+            setShifts([...shifts, newShift]);
+          };
+
+          const removeShift = (id) => {
+            setShifts(shifts.filter(s => s.id !== id));
+          };
+
+          const updateShift = (id, field, value) => {
+            setShifts(shifts.map(s => s.id === id ? { ...s, [field]: value } : s));
+          };
+
+          const toggleDay = (shiftId, day) => {
+            setShifts(shifts.map(s => {
+              if (s.id === shiftId) {
+                const days = s.days.includes(day) 
+                  ? s.days.filter(d => d !== day)
+                  : [...s.days, day];
+                return { ...s, days };
+              }
+              return s;
+            }));
+          };
+
+          const calculations = useMemo(() => {
+            const hoursNeededPerWeek = ordersPerWeek / ordersPerPersonHour;
+            let totalHoursProvided = 0;
+            let totalEmployeesUsed = 0;
+            
+            shifts.forEach(shift => {
+              const hoursPerWeek = shift.days.length * shift.duration * shift.peoplePerDay;
+              totalHoursProvided += hoursPerWeek;
+              const employeesInShift = (shift.days.length * shift.duration) / 40 * shift.peoplePerDay;
+              totalEmployeesUsed += Math.ceil(employeesInShift);
+            });
+            
+            const coverage = (totalHoursProvided / hoursNeededPerWeek) * 100;
+            const surplus = totalHoursProvided - hoursNeededPerWeek;
+            
+            const employeeHoursMap = new Map();
+            shifts.forEach(shift => {
+              const hoursPerWeekPerPerson = shift.duration * shift.days.length;
+              for (let i = 0; i < shift.peoplePerDay; i++) {
+                const empId = `${shift.name}-${i}`;
+                const current = employeeHoursMap.get(empId) || 0;
+                employeeHoursMap.set(empId, current + hoursPerWeekPerPerson);
+              }
+            });
+            
+            let regularTime = 0, minorOT = 0, moderateOT = 0, heavyOT = 0, totalOTHours = 0;
+            employeeHoursMap.forEach((hours) => {
+              if (hours <= 40) regularTime++;
+              else if (hours <= 45) { minorOT++; totalOTHours += (hours - 40); }
+              else if (hours <= 50) { moderateOT++; totalOTHours += (hours - 40); }
+              else { heavyOT++; totalOTHours += (hours - 40); }
+            });
+            
+            const totalPeopleAnalyzed = employeeHoursMap.size;
+            const peopleOnOT = minorOT + moderateOT + heavyOT;
+            const otPercentage = totalPeopleAnalyzed > 0 ? (peopleOnOT / totalPeopleAnalyzed) * 100 : 0;
+            
+            return {
+              hoursNeededPerWeek,
+              totalHoursProvided,
+              coverage,
+              surplus,
+              totalEmployeesUsed,
+              otRisk: { regularTime, minorOT, moderateOT, heavyOT, totalPeopleAnalyzed, peopleOnOT, otPercentage, totalOTHours }
+            };
+          }, [ordersPerWeek, ordersPerPersonHour, shifts, totalEmployees, otMultiplier]);
+
+          const weeklyGrid = useMemo(() => {
+            const grid = {};
+            daysOfWeek.forEach(day => {
+              grid[day] = shifts.filter(s => s.days.includes(day));
+            });
+            return grid;
+          }, [shifts]);
+
+          const exportCSV = () => {
+            let csv = 'Atomix Workforce Schedule\n\n';
+            csv += `Orders Per Week,${ordersPerWeek}\n`;
+            csv += `Total Employees,${totalEmployees}\n`;
+            csv += `Coverage,${calculations.coverage.toFixed(1)}%\n\n`;
+            csv += 'Day,Shifts,People,Hours\n';
+            daysOfWeek.forEach(day => {
+              const dayShifts = weeklyGrid[day];
+              const people = dayShifts.reduce((sum, s) => sum + s.peoplePerDay, 0);
+              const hours = dayShifts.reduce((sum, s) => sum + (s.peoplePerDay * s.duration), 0);
+              csv += `${day},${dayShifts.length},${people},${hours}\n`;
+            });
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'atomix_schedule.csv';
+            a.click();
+          };
+
+          return (
+            <div className="min-h-screen bg-black text-white">
+              <div className="bg-gray-900 border-b border-gray-800">
+                <div className="max-w-7xl mx-auto px-6 py-6">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-4">
+                      <div className="w-10 h-10 bg-green-400 rounded-lg flex items-center justify-center">
+                        <svg className="w-6 h-6 text-black" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+                        </svg>
+                      </div>
+                      <div>
+                        <h1 className="text-2xl font-bold text-white">Workforce Scheduler</h1>
+                        <p className="text-gray-400 text-sm">High-Touch Scheduling for High-Growth Teams</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={exportCSV}
+                      className="px-5 py-2.5 bg-green-400 text-black rounded-lg hover:bg-green-300 font-semibold flex items-center"
+                    >
+                      <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3" />
+                      </svg>
+                      Export CSV
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="max-w-7xl mx-auto px-6 py-8">
+                <div className="grid grid-cols-4 gap-4 mb-8">
+                  <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+                    <div className="text-sm text-gray-400 mb-1">Hours Needed</div>
+                    <div className="text-3xl font-bold">{Math.round(calculations.hoursNeededPerWeek)}</div>
+                  </div>
+                  <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+                    <div className="text-sm text-gray-400 mb-1">Coverage</div>
+                    <div className={`text-3xl font-bold ${calculations.coverage >= 100 ? 'text-green-400' : 'text-red-400'}`}>
+                      {calculations.coverage.toFixed(0)}%
+                    </div>
+                  </div>
+                  <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+                    <div className="text-sm text-gray-400 mb-1">Employees</div>
+                    <div className="text-3xl font-bold">{calculations.totalEmployeesUsed}/{totalEmployees}</div>
+                  </div>
+                  <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+                    <div className="text-sm text-gray-400 mb-1">OT Risk</div>
+                    <div className={`text-3xl font-bold ${calculations.otRisk.otPercentage > 30 ? 'text-red-400' : 'text-green-400'}`}>
+                      {calculations.otRisk.otPercentage.toFixed(0)}%
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-6 mb-8">
+                  <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+                    <h2 className="text-lg font-bold mb-4 text-green-400">Settings</h2>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">Orders/Week</label>
+                        <input type="number" value={ordersPerWeek} onChange={(e) => setOrdersPerWeek(Number(e.target.value))}
+                          className="w-full px-4 py-2 bg-black border border-gray-700 rounded-lg text-white" />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">Employees</label>
+                        <input type="number" value={totalEmployees} onChange={(e) => setTotalEmployees(Number(e.target.value))}
+                          className="w-full px-4 py-2 bg-black border border-gray-700 rounded-lg text-white" />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">Orders/Person/Hr</label>
+                        <input type="number" step="0.5" value={ordersPerPersonHour} onChange={(e) => setOrdersPerPersonHour(Number(e.target.value))}
+                          className="w-full px-4 py-2 bg-black border border-gray-700 rounded-lg text-white" />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">OT Multiplier</label>
+                        <input type="number" step="0.1" value={otMultiplier} onChange={(e) => setOtMultiplier(Number(e.target.value))}
+                          className="w-full px-4 py-2 bg-black border border-gray-700 rounded-lg text-white" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="col-span-2 bg-gray-900 rounded-lg p-6 border border-gray-800">
+                    <div className="flex justify-between mb-4">
+                      <h2 className="text-lg font-bold text-green-400">Shifts</h2>
+                      <button onClick={addShift} className="px-4 py-2 bg-green-400 text-black rounded-lg hover:bg-green-300 font-semibold">
+                        + Add Shift
+                      </button>
+                    </div>
+                    <div className="space-y-4">
+                      {shifts.map((shift) => (
+                        <div key={shift.id} className="border border-gray-700 rounded-lg p-4 bg-black">
+                          <div className="grid grid-cols-12 gap-3 mb-3">
+                            <div className="col-span-3">
+                              <input type="text" value={shift.name} onChange={(e) => updateShift(shift.id, 'name', e.target.value)}
+                                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm" placeholder="Shift name" />
+                            </div>
+                            <div className="col-span-3">
+                              <input type="text" value={shift.startTime} onChange={(e) => updateShift(shift.id, 'startTime', e.target.value)}
+                                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm" placeholder="6:00 AM" />
+                            </div>
+                            <div className="col-span-2">
+                              <input type="number" value={shift.duration} onChange={(e) => updateShift(shift.id, 'duration', Number(e.target.value))}
+                                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm" />
+                            </div>
+                            <div className="col-span-2">
+                              <input type="number" value={shift.peoplePerDay} onChange={(e) => updateShift(shift.id, 'peoplePerDay', Number(e.target.value))}
+                                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm" />
+                            </div>
+                            <div className="col-span-2">
+                              <button onClick={() => removeShift(shift.id)}
+                                className="w-full px-3 py-2 bg-red-900/30 text-red-400 rounded-lg hover:bg-red-900/50 text-sm">
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {daysOfWeek.map(day => (
+                              <button key={day} onClick={() => toggleDay(shift.id, day)}
+                                className={`px-3 py-1.5 rounded-lg text-sm font-medium ${shift.days.includes(day) ? 'bg-green-500 text-white' : 'bg-gray-800 text-gray-400'}`}>
+                                {day.substring(0, 3)}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-gray-900 rounded-lg p-6 border border-gray-800 mb-8">
+                  <h2 className="text-xl font-bold mb-6 text-green-400">Weekly Schedule</h2>
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-gray-700">
+                        <th className="text-left py-3 px-4 text-gray-400">Day</th>
+                        <th className="text-left py-3 px-4 text-gray-400">Shifts</th>
+                        <th className="text-right py-3 px-4 text-gray-400">People</th>
+                        <th className="text-right py-3 px-4 text-gray-400">Hours</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {daysOfWeek.map((day) => {
+                        const dayShifts = weeklyGrid[day];
+                        const totalPeople = dayShifts.reduce((sum, s) => sum + s.peoplePerDay, 0);
+                        const totalHours = dayShifts.reduce((sum, s) => sum + (s.peoplePerDay * s.duration), 0);
+                        return (
+                          <tr key={day} className="border-b border-gray-800">
+                            <td className="py-3 px-4 font-medium">{day}</td>
+                            <td className="py-3 px-4">
+                              {dayShifts.length > 0 ? dayShifts.map(s => s.name).join(', ') : 'No shifts'}
+                            </td>
+                            <td className="py-3 px-4 text-right font-semibold">{totalPeople}</td>
+                            <td className="py-3 px-4 text-right">{totalHours}h</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+                  <h2 className="text-xl font-bold mb-6 text-green-400">Overtime Analysis</h2>
+                  <div className="space-y-4">
+                    <div>
+                      <div className="flex justify-between mb-2">
+                        <span className="text-sm text-gray-300">≤40 hours (Regular)</span>
+                        <span className="text-sm font-bold text-green-400">{calculations.otRisk.regularTime} people</span>
+                      </div>
+                      <div className="w-full bg-gray-800 rounded-full h-8">
+                        <div className="bg-green-500 h-8 rounded-full flex items-center justify-end pr-3"
+                          style={{ width: `${(calculations.otRisk.regularTime / calculations.otRisk.totalPeopleAnalyzed * 100) || 0}%` }}>
+                          <span className="text-black text-xs font-bold">
+                            {((calculations.otRisk.regularTime / calculations.otRisk.totalPeopleAnalyzed * 100) || 0).toFixed(0)}%
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between mb-2">
+                        <span className="text-sm text-gray-300">41-45 hours (Minor OT)</span>
+                        <span className="text-sm font-bold text-yellow-400">{calculations.otRisk.minorOT} people</span>
+                      </div>
+                      <div className="w-full bg-gray-800 rounded-full h-8">
+                        <div className="bg-yellow-500 h-8 rounded-full flex items-center justify-end pr-3"
+                          style={{ width: `${(calculations.otRisk.minorOT / calculations.otRisk.totalPeopleAnalyzed * 100) || 0}%` }}>
+                          <span className="text-black text-xs font-bold">
+                            {((calculations.otRisk.minorOT / calculations.otRisk.totalPeopleAnalyzed * 100) || 0).toFixed(0)}%
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between mb-2">
+                        <span className="text-sm text-gray-300">46-50 hours (Moderate OT)</span>
+                        <span className="text-sm font-bold text-orange-400">{calculations.otRisk.moderateOT} people</span>
+                      </div>
+                      <div className="w-full bg-gray-800 rounded-full h-8">
+                        <div className="bg-orange-500 h-8 rounded-full flex items-center justify-end pr-3"
+                          style={{ width: `${(calculations.otRisk.moderateOT / calculations.otRisk.totalPeopleAnalyzed * 100) || 0}%` }}>
+                          <span className="text-white text-xs font-bold">
+                            {((calculations.otRisk.moderateOT / calculations.otRisk.totalPeopleAnalyzed * 100) || 0).toFixed(0)}%
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between mb-2">
+                        <span className="text-sm text-gray-300">50+ hours (Heavy OT)</span>
+                        <span className="text-sm font-bold text-red-400">{calculations.otRisk.heavyOT} people</span>
+                      </div>
+                      <div className="w-full bg-gray-800 rounded-full h-8">
+                        <div className="bg-red-600 h-8 rounded-full flex items-center justify-end pr-3"
+                          style={{ width: `${(calculations.otRisk.heavyOT / calculations.otRisk.totalPeopleAnalyzed * 100) || 0}%` }}>
+                          <span className="text-white text-xs font-bold">
+                            {((calculations.otRisk.heavyOT / calculations.otRisk.totalPeopleAnalyzed * 100) || 0).toFixed(0)}%
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  {calculations.otRisk.otPercentage > 30 && (
+                    <div className="mt-6 bg-red-900/20 border border-red-500/30 rounded-lg p-4">
+                      <p className="font-bold text-red-400">⚠️ High OT Risk: {calculations.otRisk.otPercentage.toFixed(0)}% on overtime</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        ReactDOM.render(<WorkforceScheduler />, document.getElementById('root'));
+    </script>
+</body>
+</html>
